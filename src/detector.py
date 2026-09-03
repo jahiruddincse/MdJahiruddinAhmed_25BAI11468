@@ -131,3 +131,65 @@ def detect_unusual_login_times(entries, normal_start_hour=6,
             })
 
     return alerts
+
+
+def detect_new_ip_login(entries):
+    """Detect logins from IP addresses not previously seen for a user.
+
+    If a user has logged in before from known IP addresses and then a login
+    appears from a new IP, it could indicate account compromise.  However,
+    it can also be legitimate (travelling, VPN, new device).
+
+    The function processes entries in chronological order and builds a
+    running set of known IPs for each user.  A user's very first login is
+    never flagged because there is no baseline to compare against.
+
+    Args:
+        entries: list of log entry dicts (must contain 'user', 'ip').
+                 Entries must be in chronological order.
+
+    Returns:
+        list of alert dicts, one per new-IP login.
+    """
+    alerts = []
+
+    # Track which IPs we have seen for each user so far.
+    # defaultdict(set) gives every new user an empty set automatically.
+    user_known_ips = defaultdict(set)
+
+    for entry in entries:
+        user = entry["user"]
+        ip = entry["ip"]
+
+        if len(user_known_ips[user]) > 0 and ip not in user_known_ips[user]:
+            # This user has logged in before, but never from this IP.
+            alerts.append({
+                "type": "New IP Login",
+                "severity": "MEDIUM",
+                "user": user,
+                "ip": ip,
+                "details": {
+                    "timestamp": entry["timestamp"],
+                    "new_ip": ip,
+                    "known_ips": sorted(user_known_ips[user]),
+                },
+                "explanation": (
+                    f"User '{user}' logged in from {ip}, which has not "
+                    f"been previously associated with this account.  "
+                    f"Known IPs: {sorted(user_known_ips[user])}.  "
+                    f"A new source IP can indicate account compromise."
+                ),
+                "mitigation": (
+                    "Alert the user or security team.  Require additional "
+                    "verification (e.g. multi-factor authentication).  "
+                    "Do not block automatically — the user may be "
+                    "travelling or using a new device."
+                ),
+            })
+
+        # Always add the IP to the known set (whether or not we flagged it).
+        # This prevents repeated alerts for the same new IP.
+        user_known_ips[user].add(ip)
+
+    return alerts
+

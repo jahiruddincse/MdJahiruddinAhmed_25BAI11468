@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.detector import detect_repeated_failed_logins
 from src.detector import detect_unusual_login_times
+from src.detector import detect_new_ip_login
 
 
 class TestRepeatedFailedLogins(unittest.TestCase):
@@ -148,6 +149,96 @@ class TestUnusualLoginTimes(unittest.TestCase):
     def test_empty_input(self):
         """An empty log should produce zero alerts."""
         alerts = detect_unusual_login_times([])
+        self.assertEqual(len(alerts), 0)
+
+
+class TestNewIPLogin(unittest.TestCase):
+    """Tests for the new/unseen IP detection rule."""
+
+    def test_first_login_not_flagged(self):
+        """A user's very first login should NOT be flagged (no baseline)."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "alice",
+             "ip": "192.168.1.10", "status": "SUCCESS"},
+        ]
+        alerts = detect_new_ip_login(entries)
+        self.assertEqual(len(alerts), 0)
+
+    def test_second_ip_flagged(self):
+        """A second, different IP for the same user should be flagged."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "alice",
+             "ip": "192.168.1.10", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 14:00:00", "user": "alice",
+             "ip": "10.0.0.99", "status": "SUCCESS"},
+        ]
+        alerts = detect_new_ip_login(entries)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["user"], "alice")
+        self.assertEqual(alerts[0]["ip"], "10.0.0.99")
+        self.assertEqual(alerts[0]["severity"], "MEDIUM")
+        self.assertIn("192.168.1.10", alerts[0]["details"]["known_ips"])
+
+    def test_same_ip_repeated_no_flag(self):
+        """Repeated logins from the same known IP should not be flagged."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "bob",
+             "ip": "192.168.1.11", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 10:00:00", "user": "bob",
+             "ip": "192.168.1.11", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 11:00:00", "user": "bob",
+             "ip": "192.168.1.11", "status": "SUCCESS"},
+        ]
+        alerts = detect_new_ip_login(entries)
+        self.assertEqual(len(alerts), 0)
+
+    def test_multiple_new_ips_each_flagged_once(self):
+        """Each new IP for a user should be flagged exactly once."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "alice",
+             "ip": "192.168.1.10", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 14:00:00", "user": "alice",
+             "ip": "10.0.0.5", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 15:00:00", "user": "alice",
+             "ip": "10.0.0.5", "status": "SUCCESS"},  # same as above, no flag
+            {"timestamp": "2026-09-01 18:00:00", "user": "alice",
+             "ip": "172.16.0.1", "status": "SUCCESS"},
+        ]
+        alerts = detect_new_ip_login(entries)
+        # Two new IPs flagged: 10.0.0.5 and 172.16.0.1
+        self.assertEqual(len(alerts), 2)
+
+    def test_different_users_tracked_separately(self):
+        """IPs are tracked per user — alice's IP is not bob's baseline."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "alice",
+             "ip": "192.168.1.10", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 09:05:00", "user": "bob",
+             "ip": "192.168.1.20", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 10:00:00", "user": "bob",
+             "ip": "192.168.1.10", "status": "SUCCESS"},  # new for bob
+        ]
+        alerts = detect_new_ip_login(entries)
+        # Only bob's second IP is flagged (alice's first login is not)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["user"], "bob")
+
+    def test_new_ip_added_to_known_set(self):
+        """After being flagged, a new IP becomes known and is not re-flagged."""
+        entries = [
+            {"timestamp": "2026-09-01 09:00:00", "user": "carol",
+             "ip": "192.168.1.30", "status": "SUCCESS"},
+            {"timestamp": "2026-09-01 14:00:00", "user": "carol",
+             "ip": "10.0.0.7", "status": "SUCCESS"},  # flagged
+            {"timestamp": "2026-09-01 15:00:00", "user": "carol",
+             "ip": "10.0.0.7", "status": "SUCCESS"},  # NOT flagged again
+        ]
+        alerts = detect_new_ip_login(entries)
+        self.assertEqual(len(alerts), 1)  # only one alert, not two
+
+    def test_empty_input(self):
+        """An empty log should produce zero alerts."""
+        alerts = detect_new_ip_login([])
         self.assertEqual(len(alerts), 0)
 
 
