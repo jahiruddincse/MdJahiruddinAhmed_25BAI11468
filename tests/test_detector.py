@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from src.detector import detect_repeated_failed_logins
 from src.detector import detect_unusual_login_times
 from src.detector import detect_new_ip_login
+from src.detector import detect_username_enumeration
 
 
 class TestRepeatedFailedLogins(unittest.TestCase):
@@ -239,6 +240,75 @@ class TestNewIPLogin(unittest.TestCase):
     def test_empty_input(self):
         """An empty log should produce zero alerts."""
         alerts = detect_new_ip_login([])
+        self.assertEqual(len(alerts), 0)
+
+
+class TestUsernameEnumeration(unittest.TestCase):
+    """Tests for the username enumeration detection rule."""
+
+    def test_single_user_multiple_failures_ignored(self):
+        """Failures for the SAME user should not trigger enumeration (that's brute force)."""
+        entries = [
+            {"timestamp": "t1", "user": "admin", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t2", "user": "admin", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t3", "user": "admin", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t4", "user": "admin", "ip": "10.0.0.5", "status": "FAILED"},
+        ]
+        # Only 1 distinct username tried, well below default threshold of 3.
+        alerts = detect_username_enumeration(entries)
+        self.assertEqual(len(alerts), 0)
+
+    def test_multiple_users_above_threshold(self):
+        """An IP trying 3 or more distinct usernames (and failing) should be flagged."""
+        entries = [
+            {"timestamp": "t1", "user": "admin", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t2", "user": "root", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t3", "user": "test", "ip": "10.0.0.5", "status": "FAILED"},
+            {"timestamp": "t4", "user": "user1", "ip": "10.0.0.5", "status": "FAILED"},
+        ]
+        alerts = detect_username_enumeration(entries, threshold=3)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["ip"], "10.0.0.5")
+        self.assertEqual(alerts[0]["details"]["distinct_usernames_tried"], 4)
+        self.assertEqual(alerts[0]["severity"], "HIGH")
+
+    def test_successful_logins_ignored(self):
+        """Successful logins should not count towards enumeration threshold."""
+        entries = [
+            {"timestamp": "t1", "user": "alice", "ip": "192.168.1.100", "status": "SUCCESS"},
+            {"timestamp": "t2", "user": "bob", "ip": "192.168.1.100", "status": "SUCCESS"},
+            {"timestamp": "t3", "user": "carol", "ip": "192.168.1.100", "status": "SUCCESS"},
+        ]
+        alerts = detect_username_enumeration(entries, threshold=3)
+        self.assertEqual(len(alerts), 0)
+
+    def test_different_ips_counted_separately(self):
+        """Distinct usernames are counted per IP."""
+        entries = [
+            {"timestamp": "t1", "user": "user1", "ip": "10.0.0.1", "status": "FAILED"},
+            {"timestamp": "t2", "user": "user2", "ip": "10.0.0.1", "status": "FAILED"},
+            {"timestamp": "t3", "user": "user3", "ip": "10.0.0.2", "status": "FAILED"},
+            {"timestamp": "t4", "user": "user4", "ip": "10.0.0.2", "status": "FAILED"},
+        ]
+        # IP 10.0.0.1 tried 2 users. IP 10.0.0.2 tried 2 users.
+        # Threshold is 3. Neither should trigger.
+        alerts = detect_username_enumeration(entries, threshold=3)
+        self.assertEqual(len(alerts), 0)
+
+    def test_custom_threshold(self):
+        """A custom threshold should be respected."""
+        entries = [
+            {"timestamp": "t1", "user": "admin", "ip": "10.0.0.9", "status": "FAILED"},
+            {"timestamp": "t2", "user": "guest", "ip": "10.0.0.9", "status": "FAILED"},
+        ]
+        # Threshold of 2 should flag this.
+        alerts = detect_username_enumeration(entries, threshold=2)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["details"]["distinct_usernames_tried"], 2)
+
+    def test_empty_input(self):
+        """An empty log should produce zero alerts."""
+        alerts = detect_username_enumeration([])
         self.assertEqual(len(alerts), 0)
 
 

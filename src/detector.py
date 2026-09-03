@@ -193,3 +193,55 @@ def detect_new_ip_login(entries):
 
     return alerts
 
+
+def detect_username_enumeration(entries, threshold=3):
+    """Detect IPs attempting to authenticate with many different usernames.
+
+    If a single IP address tries to log in using multiple distinct usernames
+    and fails, it suggests an attacker is probing the system to see which
+    accounts exist (username enumeration).
+
+    Args:
+        entries: list of log entry dicts (must contain 'user', 'ip', 'status').
+        threshold: minimum number of distinct failed usernames from a single
+                   IP to trigger an alert. Default is 3.
+
+    Returns:
+        list of alert dicts, one per flagged IP.
+    """
+    alerts = []
+
+    # Track distinct failed usernames per IP.
+    ip_failed_users = defaultdict(set)
+
+    for entry in entries:
+        if entry["status"] == "FAILED":
+            ip_failed_users[entry["ip"]].add(entry["user"])
+
+    for ip, users in ip_failed_users.items():
+        if len(users) >= threshold:
+            alerts.append({
+                "type": "Username Enumeration",
+                "severity": "HIGH",
+                "user": "MULTIPLE",  # Not tied to a single user
+                "ip": ip,
+                "details": {
+                    "distinct_usernames_tried": len(users),
+                    "usernames": sorted(users),
+                    "threshold": threshold,
+                },
+                "explanation": (
+                    f"IP {ip} attempted to log in with {len(users)} different "
+                    f"usernames. A single source probing multiple accounts "
+                    f"suggests username enumeration."
+                ),
+                "mitigation": (
+                    "Rate limit login attempts per IP. Ensure login error "
+                    "messages are generic (e.g., 'Invalid credentials') so "
+                    "attackers cannot distinguish between invalid usernames "
+                    "and invalid passwords. Note: False positives can occur "
+                    "from NAT gateways, proxies, or shared computers."
+                ),
+            })
+
+    return alerts
