@@ -237,6 +237,23 @@ class TestNewIPLogin(unittest.TestCase):
         alerts = detect_new_ip_login(entries)
         self.assertEqual(len(alerts), 1)  # only one alert, not two
 
+    def test_failed_logins_do_not_pollute_baseline(self):
+        """Failed attempts from a new IP must NOT establish that IP as known baseline."""
+        entries = [
+            # Alice's initial baseline established from 192.168.1.10
+            {"timestamp": "t1", "user": "alice", "ip": "192.168.1.10", "status": "SUCCESS"},
+            # Attacker fails attempts from 10.0.0.99
+            {"timestamp": "t2", "user": "alice", "ip": "10.0.0.99", "status": "FAILED"},
+            {"timestamp": "t3", "user": "alice", "ip": "10.0.0.99", "status": "FAILED"},
+            # Attacker succeeds from 10.0.0.99 -> Should trigger alert because 10.0.0.99 was not in SUCCESS baseline
+            {"timestamp": "t4", "user": "alice", "ip": "10.0.0.99", "status": "SUCCESS"},
+        ]
+        alerts = detect_new_ip_login(entries)
+        self.assertEqual(len(alerts), 1)
+        self.assertEqual(alerts[0]["user"], "alice")
+        self.assertEqual(alerts[0]["ip"], "10.0.0.99")
+        self.assertIn("192.168.1.10", alerts[0]["details"]["known_ips"])
+
     def test_empty_input(self):
         """An empty log should produce zero alerts."""
         alerts = detect_new_ip_login([])

@@ -136,16 +136,20 @@ def detect_unusual_login_times(entries, normal_start_hour=6,
 def detect_new_ip_login(entries):
     """Detect logins from IP addresses not previously seen for a user.
 
-    If a user has logged in before from known IP addresses and then a login
-    appears from a new IP, it could indicate account compromise.  However,
+    If a user has logged in before from known IP addresses and then a successful
+    login appears from a new IP, it could indicate account compromise.  However,
     it can also be legitimate (travelling, VPN, new device).
 
+    Failed login attempts do NOT update the user's known-IP baseline to prevent
+    an attacker's failed password attempts from polluting the baseline.
+
     The function processes entries in chronological order and builds a
-    running set of known IPs for each user.  A user's very first login is
-    never flagged because there is no baseline to compare against.
+    running set of known IPs for each user based strictly on successful logins.
+    A user's very first successful login is never flagged because there is no
+    baseline to compare against.
 
     Args:
-        entries: list of log entry dicts (must contain 'user', 'ip').
+        entries: list of log entry dicts (must contain 'user', 'ip', 'status').
                  Entries must be in chronological order.
 
     Returns:
@@ -153,16 +157,20 @@ def detect_new_ip_login(entries):
     """
     alerts = []
 
-    # Track which IPs we have seen for each user so far.
+    # Track which IPs we have seen for each user in successful logins.
     # defaultdict(set) gives every new user an empty set automatically.
     user_known_ips = defaultdict(set)
 
     for entry in entries:
+        # Only evaluate and build baseline from successful logins
+        if entry.get("status") != "SUCCESS":
+            continue
+
         user = entry["user"]
         ip = entry["ip"]
 
         if len(user_known_ips[user]) > 0 and ip not in user_known_ips[user]:
-            # This user has logged in before, but never from this IP.
+            # This user has logged in successfully before, but never from this IP.
             alerts.append({
                 "type": "New IP Login",
                 "severity": "MEDIUM",
@@ -187,8 +195,7 @@ def detect_new_ip_login(entries):
                 ),
             })
 
-        # Always add the IP to the known set (whether or not we flagged it).
-        # This prevents repeated alerts for the same new IP.
+        # Always add the IP to the known set of successful login IPs
         user_known_ips[user].add(ip)
 
     return alerts
